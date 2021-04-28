@@ -7,30 +7,28 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <MAX31855.h>
-#define RelayPin D2
+#define RelayPin D2 // D2 for external relay, D0 for testing with internal LED
 
 // Update these with values suitable for your network.
 
-const char* ssid = "XXXXXXX"; // Input your SSID here
-const char* password = "XXXXXXXXX"; // Input your WiFi password here
+const char* ssid = "xxxxxx"; // Input your SSID here
+const char* password = "xxxxxxx"; // Input your WiFi password here
 const char* mqtt_server = "0.0.0.0"; // The IP address of the MQTT server
 
 //Define Variables we'll be connecting to
 double Setpoint, Input, Output;
-float Tempfloat;
+int average;
+int trigger = 1;
 
 //Specify the links and initial tuning parameters
-PID myPID(&Input, &Output, &Setpoint, 2, 5, 1, DIRECT);
+PID myPID(&Input, &Output, &Setpoint, 50, 25, 2, DIRECT);  //adjust PID paramenters here (in that order)
 
 WiFiClient espClient;
 PubSubClient client(espClient);
-long lastMsg = 0;
+
 char msg[50];
 int value = 0;
 int sensor = 0;
-float volt = 1;
-float sensorfloat = 1;
-float temp = 1;
 int32_t rawData = 0;
 
 
@@ -100,7 +98,7 @@ if (0 < vaerdi < 120) {
   Setpoint = vaerdi;
 }
 
-//Publish new (or old, if the  setpoint in the state topic
+//Publish new setpoint (or old, if the  setpoint received is out of bounds)
 
 client.publish("gaggia/temperature/state", String(Setpoint).c_str(), true);
 
@@ -114,7 +112,7 @@ void reconnect() {
     String clientId = "ESP8266Client-";
     clientId += String(random(0xffff), HEX);
     // Attempt to connect, set your username and password for MQTT here
-    if (client.connect(clientId.c_str(), "username", "password")) {
+    if (client.connect(clientId.c_str(), "xxxxxx", "xxxxxxx")) {
       Serial.println("connected");
       // Once connected, publish an announcement...
       client.publish("outTopic", "her er jeg igen");
@@ -131,7 +129,7 @@ void reconnect() {
 }
 
 
-int WindowSize = 5000; // Duration of the duty cycle window
+int WindowSize = 3500; // Duration of the duty cycle window
 unsigned long windowStartTime;
 
 void setup() {
@@ -157,19 +155,21 @@ void setup() {
 
   while (myMAX31855.getChipID() != MAX31855_ID)
   {
-    Serial.println(F("MAX6675 error")); //(F()) saves string to flash & keeps dynamic memory free
+    Serial.println(F("MAX31855 error")); //(F()) saves string to flash & keeps dynamic memory free
     delay(5000);
   }
-  Serial.println(F("MAX6675 OK"));
+  Serial.println(F("MAX31855 OK"));
   
 }
 
 
 void loop() {
 
+//first of all, check if we are still on wifi
   if (!client.connected()) {
     reconnect();
   }
+//and let the wifi library do it's stuff   
   client.loop();
 
 
@@ -203,48 +203,53 @@ void loop() {
 
 
 
-//Update Output each time a tenth of the timewindow has passed
+//Update PID Output each time a fifth of the timewindow has passed and trigger flag has been set to 1
 
 unsigned long now = millis();
 
-
-
-
-if (now - windowStartTime > WindowSize / 5){
+int sum = 0;
+if ((now - windowStartTime > WindowSize / 5) && (trigger == 1)){
 
 //read the sensor and compute PID output 
 
-rawData = myMAX31855.readRawData();
+  for (int i = 0; i < 20; i++) { //loop for averaging dirty sensor data
 
-
-  
-sensor = myMAX31855.getTemperature(rawData);
-Input = (double)sensor;
-myPID.Compute();  
-  
+    rawData = myMAX31855.readRawData(); //get raw data from max31855
+    sensor = myMAX31855.getTemperature(rawData); //get temperature from raw data
+    sum = sum + sensor;
+    delay(2); //wait a litte and read sensor again.
   }
 
+average = sum / 20; //divide by the number of sensor readings
+trigger = 0; //set trigger flag to 0 to skip the function until further notice
+Input = (double)average; //convert average to double for the myPID.Compute() function
+myPID.Compute();  
+  
+}
 
-//Update and transmit each time a timewindow has passed  
+// Use output to adjust duty cycle of relay
+  
+  if (Output > now - windowStartTime) {
+    digitalWrite(RelayPin, HIGH);
+  }
+  else digitalWrite(RelayPin, LOW);
+
+//Update timewindow and transmit each time a timewindow has passed  
   if (now - windowStartTime > WindowSize){
     windowStartTime += WindowSize;
     ++value;
     snprintf (msg, 50, "aflaesning %ld", value);
     Serial.print("Publish message: ");
     Serial.println(msg);
-    Serial.println(sensor);
+    Serial.println(average);
     Serial.println(" celcius");
     
-      client.publish("gaggia/temperature/current", String(sensor).c_str(), true);
+      client.publish("gaggia/temperature/current", String(average).c_str(), true);
   
   Serial.println(Output);
+  trigger = 1; //reset the trigger to enable the sensor read/averageing function
 
-  
+    
   }
 
-// Use output to adjust duty cycle of relay
-  
-  if (Output > now - windowStartTime) digitalWrite(RelayPin, HIGH);
-  else digitalWrite(RelayPin, LOW);
- 
-  }
+}
