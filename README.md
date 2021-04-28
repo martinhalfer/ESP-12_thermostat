@@ -11,8 +11,12 @@ MAX31855 thermocouple amplifier.<br>
 Screw terminals for AC power, thermocouple input and relay output.<br>
 Breakout connectors for programming of the ESP8266 after assembly of the PCB.
 
-Software: (not developed yet)<br>
+Software:<br>
 Temperature readout through SPI<br>
 PID controlled duty cycle relay output<br>
 MQTT temperature readout and setpoint setting.
 Written in the Ardunio IDE
+
+Mounting hardware:
+Can be mounted to coffee machine with M3 standoffs. 3D printable mounting base model in repository
+
