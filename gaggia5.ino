@@ -17,11 +17,11 @@ const char* mqtt_server = "0.0.0.0"; // The IP address of the MQTT server
 
 //Define Variables we'll be connecting to
 double Setpoint, Input, Output;
-int average;
+int average = 0;
 int trigger = 1;
 
 //Specify the links and initial tuning parameters
-PID myPID(&Input, &Output, &Setpoint, 50, 25, 2, DIRECT);  //adjust PID paramenters here (in that order)
+PID myPID(&Input, &Output, &Setpoint, 50, 25, 10, DIRECT);
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -112,7 +112,7 @@ void reconnect() {
     String clientId = "ESP8266Client-";
     clientId += String(random(0xffff), HEX);
     // Attempt to connect, set your username and password for MQTT here
-    if (client.connect(clientId.c_str(), "xxxxxx", "xxxxxxx")) {
+    if (client.connect(clientId.c_str(), "xxxxx", "xxxxx")) {
       Serial.println("connected");
       // Once connected, publish an announcement...
       client.publish("outTopic", "her er jeg igen");
@@ -129,7 +129,7 @@ void reconnect() {
 }
 
 
-int WindowSize = 3500; // Duration of the duty cycle window
+int WindowSize = 3000; // Duration of the duty cycle window
 unsigned long windowStartTime;
 
 void setup() {
@@ -212,17 +212,25 @@ if ((now - windowStartTime > WindowSize / 5) && (trigger == 1)){
 
 //read the sensor and compute PID output 
 
-  for (int i = 0; i < 20; i++) { //loop for averaging dirty sensor data
+  for (int i = 0; i < 20; i++) { //loop for averaging and filtering dirty sensor data
 
     rawData = myMAX31855.readRawData(); //get raw data from max31855
     sensor = myMAX31855.getTemperature(rawData); //get temperature from raw data
-    sum = sum + sensor;
+  
+      if ((average == 0) || (average - 8 < sensor < average + 8)) { //if average has not been calculated yet, or sensor reading is within +-8 of avg, add to sum
+      sum = sum + sensor;
+      }
+      else { //else add the last average in place of a real sensor value
+      sum = sum + average;
+      }
     delay(2); //wait a litte and read sensor again.
   }
 
 average = sum / 20; //divide by the number of sensor readings
-trigger = 0; //set trigger flag to 0 to skip the function until further notice
-Input = (double)average; //convert average to double for the myPID.Compute() function
+trigger = 0; //set trigger flag to 0 to skip the sensor read and PID conpute next loops.
+if (average < 175) {
+  Input = (double)average; //If it is not a spike reading above 175C, convert average to double for the myPID.Compute() function
+}
 myPID.Compute();  
   
 }
@@ -238,16 +246,25 @@ myPID.Compute();
   if (now - windowStartTime > WindowSize){
     windowStartTime += WindowSize;
     ++value;
-    snprintf (msg, 50, "aflaesning %ld", value);
-    Serial.print("Publish message: ");
-    Serial.println(msg);
-    Serial.println(average);
-    Serial.println(" celcius");
+//send current values to serial for debugging  
+    Serial.print(value);
+    Serial.print("; ");
+    Serial.print((millis() / 1000));
+    Serial.print("; ");
+    Serial.print(average);
+    Serial.print("; ");
+    Serial.print(Output);
+    Serial.print("; ");
+    Serial.println(Setpoint);
+   
     
-      client.publish("gaggia/temperature/current", String(average).c_str(), true);
-  
-  Serial.println(Output);
-  trigger = 1; //reset the trigger to enable the sensor read/averageing function
+    
+    
+    
+    if (average < 175) client.publish("gaggia/temperature/current", String(average).c_str(), true); // Publish average reading, if it is not a spike.
+
+
+  trigger = 1; // reset the trigger to activate new sensor read and PID computation
 
     
   }
